@@ -35,8 +35,6 @@
         <button id="planButton" class="primary" onclick="applyTodayPlan()">套用今日課表 →</button>
         <button class="secondary-link" onclick="loadLastWorkout(true)">或沿用上一次 Workout</button>
       </div>
-      <div class="section-head"><h3>今日 Checklist</h3><span id="todayCount" class="muted"></span></div>
-      <div id="todayChecklist" class="card checklist"></div>
       <button id="continueButton" class="primary" style="margin-top:12px" onclick="showScreen('log')">開始／繼續記錄 →</button>
       <div class="section-head"><h3>近期活動</h3></div>
       <div class="stats">
@@ -48,13 +46,14 @@
 
     <section id="log" class="screen">
       <div class="log-head">
-        <div><div class="eyebrow">記錄</div><h2>今天的 Workout</h2><div id="logDate" class="log-date"></div></div>
+        <div><div class="eyebrow">記錄</div><h2>訓練紀錄</h2><label class="log-date">訓練日期 <input id="workoutDate" type="date" onchange="changeWorkoutDate(this.value)"></label></div>
         <button class="small" onclick="clearDraft()">清除</button>
       </div>
       <div class="add-area">
         <button class="primary" onclick="openExercisePicker()">＋ 新增 Exercise</button>
         <button class="small accent-outline" onclick="loadLastWorkout()">沿用上次</button>
       </div>
+      <button class="small" style="width:100%;margin-bottom:14px" onclick="openBulk()">貼上文字，批次匯入</button>
       <div id="exerciseList" class="exercise-list"></div>
       <div id="saveBar" class="save-bar"><button class="primary" onclick="saveWorkout()">完成並儲存 Workout ✓</button></div>
     </section>
@@ -88,6 +87,16 @@
     </div>
   </dialog>
 
+  <dialog id="bulkDialog"><div class="dialog-inner">
+<div class="dialog-head"><h3>文字批次匯入</h3><button onclick="bulkDialog.close()">×</button></div>
+<p class="muted">支援清單中的英文動作名稱、kg × reps × sets、握法與左右腳。這是本機規則解析；不確定的內容請先檢查。留空的欄位會以「未填」保留，不會猜測。</p>
+<label>訓練日期 <input id="bulkDate" type="date"></label>
+<textarea id="bulkText" rows="10" style="width:100%;margin:12px 0;padding:12px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:12px" placeholder="Hip thrust&#10;15 x 12 rep x 2 set" oninput="invalidateBulk()"></textarea>
+<button class="small" onclick="loadProvidedWorkout()">帶入你剛貼的 Workout</button>
+<button class="primary" style="margin-top:12px" onclick="previewBulk()">解析並預覽</button>
+<div id="bulkPreview" style="margin-top:16px"></div>
+<button id="bulkSave" hidden class="primary" onclick="saveBulk()">確認並儲存到 History</button>
+</div></dialog>
   <dialog id="settingsDialog">
     <div class="dialog-inner">
       <div class="dialog-head"><h3>資料與備份</h3><button onclick="settingsDialog.close()">×</button></div>
@@ -129,7 +138,7 @@
     function library(){return [...BASE,...(data.customExercises||[])]}
     function ex(id){return library().find(x=>x.id===id)||{id,name:'已刪除的 Exercise',category:'Other',metric:'weight',variants:['Standard']}}
     function esc(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
-    function dateText(v,short=false){return new Intl.DateTimeFormat('zh-TW',short?{month:'numeric',day:'numeric'}:{month:'long',day:'numeric',weekday:'short'}).format(new Date(v+'T12:00:00'))}
+    function dateText(v,short=false){return new Intl.DateTimeFormat('zh-TW',short?{month:'numeric',day:'numeric'}:{year:'numeric',month:'long',day:'numeric',weekday:'short'}).format(new Date(v+'T12:00:00'))}
     function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active',s.id===id));document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active',b.dataset.screen===id));if(id==='today')renderToday();if(id==='log')renderLog();if(id==='history')renderHistory();scrollTo({top:0,behavior:'smooth'})}
 
     const doneCount=i=>i.variants.flatMap(v=>v.sets).filter(s=>s.done).length;
@@ -148,9 +157,6 @@
     function currentPlan(){return PLAN[getPlanKey()]}
     function renderToday(){
       const items=data.draft.items;
-      const done=items.filter(i=>doneCount(i)>0&&doneCount(i)===totalCount(i)).length;
-      todayCount.textContent=`${done} / ${items.length}`;
-      todayChecklist.innerHTML=items.length?items.map(i=>`<div class="checklist-row ${doneCount(i)>0&&doneCount(i)===totalCount(i)?'done':''}"><span class="box">✓</span><strong>${esc(ex(i.exerciseId).name)}</strong><small>${doneCount(i)}/${totalCount(i)} 組</small></div>`).join(''):'<div class="empty" style="border:0">還沒有今日 Checklist。<br>按上方「套用今日課表」就會自動建立。</div>';
       continueButton.style.display=items.length?'block':'none';
       planButton.textContent=items.length?'重新套用今日課表 →':'套用今日課表 →';
       const n=new Date(),mon=new Date(n);mon.setDate(n.getDate()-((n.getDay()+6)%7));mon.setHours(0,0,0,0);
@@ -171,12 +177,12 @@
     function removeExercise(i){if(confirm(`移除 ${ex(data.draft.items[i].exerciseId).name}？`)){data.draft.items.splice(i,1);persist();renderLog()}}
     function clearDraft(){if(!data.draft.items.length||confirm('清除尚未儲存的 Workout？')){data.draft={date:localDate(),items:[]};persist();renderLog()}}
     function recent(id,all=false){const rows=data.history.map(h=>({date:h.date,item:h.items.find(i=>i.exerciseId===id)})).filter(x=>x.item);return all?rows:rows.slice(0,3)}
-    function setSummary(sets,metric){const g=[];sets.forEach(s=>{const key=s.weight+'|'+s.reps,last=g.at(-1);last?.key===key?last.count++:g.push({key,weight:s.weight,reps:s.reps,count:1})});return g.map(x=>`${x.weight||'—'} ${metric==='assistance'?'kg assist':'kg'} × ${x.reps||'—'} × ${x.count}`).join('; ')}
+    function setSummary(sets,metric){if(sets.some(s=>s.countUnknown||s.reps==null||s.weight==null))return sets.map(s=>`${s.weight==null?'未填重量':esc(s.weight)} ${metric==='assistance'?'kg assist':'kg'} × ${s.reps==null?'未填次數':esc(s.reps)} × ${s.countUnknown?'未填組數':'1 組'}`).join('; ');const g=[];sets.forEach(s=>{const key=s.weight+'|'+s.reps,last=g.at(-1);last?.key===key?last.count++:g.push({key,weight:s.weight,reps:s.reps,count:1})});return g.map(x=>`${x.weight==null||x.weight===''?'—':esc(x.weight)} ${metric==='assistance'?'kg assist':'kg'} × ${x.reps||'—'} × ${x.count}`).join('; ')}
     function itemSummary(item){const x=ex(item.exerciseId);return item.variants.map(v=>`${v.name!=='Standard'?`<strong>${esc(v.name)}</strong> · `:''}${setSummary(v.sets,x.metric)}`).join('<br>')}
-    function compactItemSummary(item){const x=ex(item.exerciseId),sets=item.variants.flatMap(v=>v.sets),weights=sets.map(s=>Number(s.weight)).filter(Number.isFinite);const range=weights.length?(Math.min(...weights)===Math.max(...weights)?`${weights[0]} kg`:`${Math.min(...weights)}–${Math.max(...weights)} kg`):'未記重量';return`${sets.length} 組 · ${x.metric==='assistance'?'輔助 ':''}${range}`}
+    function compactItemSummary(item){const x=ex(item.exerciseId),sets=item.variants.flatMap(v=>v.sets),weights=sets.filter(s=>s.weight!=null&&s.weight!=='').map(s=>Number(s.weight)).filter(Number.isFinite);const range=weights.length?(Math.min(...weights)===Math.max(...weights)?`${weights[0]} kg`:`${Math.min(...weights)}–${Math.max(...weights)} kg`):'未記重量';return`${sets.some(s=>s.countUnknown)?'組數待補':sets.length+' 組'} · ${x.metric==='assistance'?'輔助 ':''}${range}`}
     function renderRecent(id){const rows=recent(id);return rows.length?rows.map(r=>`<div class="recent-row"><time>${dateText(r.date,true)}</time><div>${itemSummary(r.item)}</div></div>`).join(''):'<div class="no-recent">還沒有紀錄。今天儲存後就會出現在這裡。</div>'}
 
-    function renderLog(){logDate.textContent=dateText(data.draft.date);saveBar.style.display=data.draft.items.length?'block':'none';exerciseList.innerHTML=data.draft.items.length?data.draft.items.map((i,n)=>card(i,n)).join(''):'<div class="empty">還沒有 Exercise。<br>按上方「新增 Exercise」開始。</div>'}
+    function renderLog(){workoutDate.value=data.draft.date;saveBar.style.display=data.draft.items.length?'block':'none';exerciseList.innerHTML=data.draft.items.length?data.draft.items.map((i,n)=>card(i,n)).join(''):'<div class="empty">還沒有 Exercise。<br>按上方「新增 Exercise」開始。</div>'}
     function card(item,i){const x=ex(item.exerciseId),last=recent(x.id)[0];return`<article class="card exercise-card"><div class="exercise-top"><div><div class="exercise-name">${esc(x.name)}</div><div class="exercise-category">${esc(x.category)}${x.metric==='assistance'?' · 輔助重量越低代表進步':''}</div></div><button class="remove" onclick="removeExercise(${i})">×</button></div><div class="recent"><div class="recent-title"><span>最近 3 次</span>${last?`<button class="small" onclick="copyLastExercise(${i})">套用上次</button>`:''}</div>${renderRecent(x.id)}</div>${item.variants.map((v,j)=>variantBlock(x,v,i,j)).join('')}<div class="actions">${x.variants.length>1?`<button class="small" onclick="addVariant(${i})">＋ 新增 Stance / Grip</button>`:''}</div></article>`}
     function variantBlock(x,v,i,j){return`<div class="variant"><div class="variant-head"><select class="variant-select" onchange="changeVariant(${i},${j},this.value)">${x.variants.map(n=>`<option ${n===v.name?'selected':''}>${esc(n)}</option>`).join('')}</select>${j?`<button class="remove" onclick="removeVariant(${i},${j})">×</button>`:''}</div>${v.sets.map((s,k)=>setRow(x,s,i,j,k)).join('')}<div class="actions"><button class="small" onclick="addSet(${i},${j})">＋ 新增一組</button></div></div>`}
     function setRow(x,s,i,j,k){return`<div class="set-row"><span class="set-num">${k+1}</span><label class="field"><input type="number" inputmode="decimal" step="0.5" min="0" value="${esc(s.weight)}" onchange="updateSet(${i},${j},${k},'weight',this.value)"><small>${x.metric==='assistance'?'assist':'kg'}</small></label><label class="field"><input type="number" inputmode="numeric" min="0" value="${esc(s.reps)}" onchange="updateSet(${i},${j},${k},'reps',this.value)"><small>reps</small></label><button class="check ${s.done?'done':''}" onclick="toggleSet(${i},${j},${k})">✓</button><button class="delete-set" onclick="removeSet(${i},${j},${k})">−</button></div>`}
@@ -187,19 +193,19 @@
     function addVariant(i){const item=data.draft.items[i],x=ex(item.exerciseId),name=x.variants.find(n=>!item.variants.some(v=>v.name===n));if(!name)return toast('所有可用的 stance / grip 都已加入');item.variants.push({name,sets:blank()});persist();renderLog()}
     function removeVariant(i,j){data.draft.items[i].variants.splice(j,1);persist();renderLog()}
     function changeVariant(i,j,name){const item=data.draft.items[i];if(item.variants.some((v,n)=>v.name===name&&n!==j))return toast('這個 variation 已加入');item.variants[j].name=name;persist();renderLog()}
-    function copyLastExercise(i){const item=data.draft.items[i],r=recent(item.exerciseId)[0];if(!r)return;item.variants=r.item.variants.map(v=>({name:v.name,sets:v.sets.map(s=>({weight:s.weight,reps:s.reps,done:false}))}));persist();renderLog();toast('已套用上次紀錄')}
+    function copyLastExercise(i){const item=data.draft.items[i],r=recent(item.exerciseId)[0];if(!r)return;item.variants=r.item.variants.map(v=>({name:v.name,sets:v.sets.map(s=>({weight:s.weight??'',reps:s.reps??'',done:false}))}));persist();renderLog();toast('已套用上次紀錄')}
     function loadLastWorkout(fromToday=false){const last=data.history[0];if(!last)return toast('還沒有上一筆 Workout');if(data.draft.items.length&&!confirm('以最近一次 Workout 取代目前未儲存內容？'))return;data.draft={date:localDate(),items:last.items.map(i=>({exerciseId:i.exerciseId,variants:i.variants.map(v=>({name:v.name,sets:v.sets.map(s=>({weight:s.weight,reps:s.reps,done:false}))}))}))};persist();if(fromToday)showScreen('log');else renderLog();toast('已載入最近一次 Workout')}
-    function saveWorkout(){const items=data.draft.items.map(i=>({exerciseId:i.exerciseId,variants:i.variants.map(v=>({name:v.name,sets:v.sets.filter(s=>s.done&&s.weight!==''&&Number(s.reps)>0).map(s=>({weight:s.weight,reps:Number(s.reps),done:true}))})).filter(v=>v.sets.length)})).filter(i=>i.variants.length);if(!items.length)return toast('請至少完成並勾選一組');data.history.unshift({id:Date.now(),date:data.draft.date,items});data.history=data.history.slice(0,200);data.draft={date:localDate(),items:[]};persist();showScreen('today');toast('Workout 已儲存 ✓')}
+    function saveWorkout(){const items=data.draft.items.map(i=>({exerciseId:i.exerciseId,variants:i.variants.map(v=>({name:v.name,sets:v.sets.filter(s=>s.done&&s.weight!==''&&Number(s.reps)>0).map(s=>({weight:s.weight,reps:Number(s.reps),done:true}))})).filter(v=>v.sets.length)})).filter(i=>i.variants.length);if(!items.length)return toast('請至少完成並勾選一組');data.history.unshift({id:Date.now(),date:data.draft.date,items});data.history.sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);data.draft={date:localDate(),items:[]};persist();showScreen('today');toast('Workout 已儲存 ✓')}
 
     function renderHistory(){
       historyList.innerHTML=data.history.length?data.history.map(h=>{
         const setTotal=h.items.reduce((n,i)=>n+i.variants.reduce((m,v)=>m+v.sets.length,0),0);
-        return`<article class="card session-card"><div class="session-head"><div><time>${dateText(h.date)}</time><div class="session-meta">${h.items.length} 個 exercises · ${setTotal} 組</div></div><span class="tag">Workout</span></div>${h.items.map(i=>`<button class="session-exercise" onclick="openExerciseHistory('${i.exerciseId}')"><span><strong>${esc(ex(i.exerciseId).name)}</strong><small>${compactItemSummary(i)}</small></span><span class="chevron">›</span></button>`).join('')}</article>`
+        return`<article class="card session-card"><div class="session-head"><div><time>${dateText(h.date)}</time><div class="session-meta">${h.items.length} 個 exercises · ${h.items.some(i=>i.variants.some(v=>v.sets.some(s=>s.countUnknown)))?'部分組數待補':setTotal+' 組'}</div></div><span class="tag">Workout</span></div>${h.items.map(i=>`<button class="session-exercise" onclick="openExerciseHistory('${i.exerciseId}')"><span><strong>${esc(ex(i.exerciseId).name)}</strong><small>${compactItemSummary(i)}</small></span><span class="chevron">›</span></button>`).join('')}</article>`
       }).join(''):'<div class="empty">儲存第一個 Workout 後，全部紀錄會依日期列在這裡。</div>';
     }
     function openExerciseHistory(id){
       const rows=recent(id,true),x=ex(id);exerciseHistoryTitle.textContent=x.name;
-      exerciseHistoryList.innerHTML=rows.length?rows.map(r=>`<article class="card history-card"><div class="history-head"><time>${dateText(r.date)}</time><span class="tag">${r.item.variants.flatMap(v=>v.sets).length} 組</span></div>${r.item.variants.map(v=>`<div class="history-line">${v.name!=='Standard'?`<strong>${esc(v.name)}</strong><br>`:''}${setSummary(v.sets,x.metric)}</div>`).join('')}</article>`).join(''):'<div class="empty">還沒有這個 Exercise 的紀錄。</div>';
+      exerciseHistoryList.innerHTML=rows.length?rows.map(r=>`<article class="card history-card"><div class="history-head"><time>${dateText(r.date)}</time><span class="tag">${r.item.variants.some(v=>v.sets.some(s=>s.countUnknown))?'組數待補':r.item.variants.flatMap(v=>v.sets).length+' 組'}</span></div>${r.item.variants.map(v=>`<div class="history-line">${v.name!=='Standard'?`<strong>${esc(v.name)}</strong><br>`:''}${setSummary(v.sets,x.metric)}</div>`).join('')}</article>`).join(''):'<div class="empty">還沒有這個 Exercise 的紀錄。</div>';
       exerciseHistoryDialog.showModal();
     }
 
@@ -208,6 +214,93 @@
     function importData(e){const f=e.target.files[0];if(!f)return;const r=new FileReader();r.onload=()=>{try{const x=JSON.parse(r.result);if(!x.history||!x.draft)throw 0;data=x;persist();settingsDialog.close();renderToday();toast('備份已匯入')}catch{alert('這不是有效的 Gym Autopilot 備份')}};r.readAsText(f);e.target.value=''}
     function resetAll(){if(confirm('刪除全部 Workout 紀錄？此動作無法復原。')){data=fresh();persist();settingsDialog.close();renderToday();toast('全部資料已刪除')}}
     let timer;function toast(m){clearTimeout(timer);const e=document.getElementById('toast');e.textContent=m;e.classList.add('show');timer=setTimeout(()=>e.classList.remove('show'),2200)}
+
+    function changeWorkoutDate(value){if(!validDate(value)){renderLog();return toast('請選擇有效日期')}data.draft.date=value;persist()}
+    function validDate(value){return /^\d{4}-\d{2}-\d{2}$/.test(value)&&!isNaN(Date.parse(value))&&new Date(value+'T12:00:00Z').toISOString().slice(0,10)===value}
+    const PROVIDED_WORKOUT = `Leg press
+45 wide
+45 shoulder width
+25 single leg both side
+
+Assisted pull up
+28 kg assist wide
+Supinated wide
+Shoulder width
+Supinated shoulder width
+Neutral grip
+
+Hip thrust
+15 x 12 rep x 2 set
+17.5 x 12 rep x 2 set
+
+Shoulder squat
+Empty wide
+Empty shoulder width
+Single leg left and right
+
+Low row
+15 x 12 rep x 1
+20 x 12 rep x 2
+
+Abductor
+32.5 x 12 x 1
+37.5 x 12 x 2`;
+    let bulkRows=[],bulkUnknown=[],bulkSignature='';
+    function openBulk(){bulkDate.value=data.draft.date||localDate();bulkDialog.showModal()}
+    function invalidateBulk(){bulkSave.hidden=true;bulkPreview.innerHTML='';bulkRows=[]}
+    function loadProvidedWorkout(){bulkText.value=PROVIDED_WORKOUT;invalidateBulk();toast('請確認這次訓練的日期後解析')}
+    const norm=s=>s.toLowerCase().replace(/[^a-z0-9]/g,'');
+    function parseBulk(text){
+      let rows=[],unknown=[],current=null,lastWeight=null;
+      for(const raw of text.split(/\r?\n/)){
+        const line=raw.trim().replace(/^[-•]\s*/,'');if(!line)continue;
+        const match=library().find(x=>norm(x.name)===norm(line));
+        if(match){current=match;lastWeight=null;continue}
+        if(!current){unknown.push(line);continue}
+        const low=line.toLowerCase().replace(/widt\b/g,'width');
+        const nums=[...low.matchAll(/\d+(?:\.\d+)?/g)].map(m=>Number(m[0]));
+        const empty=/\bempty\b|空槓|空機/.test(low);
+        const knownVariant=/wide|shoulder\s*width|supinated|neutral|single\s*leg|standard/i.test(low);
+        if(!nums.length&&!empty&&!knownVariant){unknown.push(line);continue}
+        if(nums.length>3||/[-−]\s*\d/.test(low)){unknown.push(line);continue}
+        let weight=nums.length?nums[0]:(empty?0:null),note=empty?'Empty 按外加重量 0 kg 記錄；不含機器或槓本身重量。':'';
+        if(weight==null&&lastWeight!=null){weight=lastWeight;note+='沿用同動作上一行重量，請確認。'}
+        if(weight!=null)lastWeight=weight;
+        const reps=nums.length>=2?nums[1]:null,count=nums.length>=3?nums[2]:null;
+        if((reps!=null&&(!Number.isInteger(reps)||reps<1))||(count!=null&&(!Number.isInteger(count)||count<1||count>100))){unknown.push(line);continue}
+        let names=['Standard'];
+        if(/single\s*leg/.test(low)){
+          names=/both|left\s*and\s*right|左右/.test(low)?['Single leg – Left','Single leg – Right']:/right/.test(low)?['Single leg – Right']:/left/.test(low)?['Single leg – Left']:['Single leg (side unspecified)'];
+        }else if(/neutral/.test(low))names=['Neutral grip'];
+        else if(/supinated/.test(low))names=[/shoulder/.test(low)?'Supinated shoulder width':/wide/.test(low)?'Supinated wide':'Supinated'];
+        else if(/shoulder\s*width/.test(low))names=['Shoulder width'];
+        else if(/wide/.test(low))names=['Wide'];
+        for(const name of names)rows.push({exerciseId:current.id,name,weight,reps,count,note,raw:line});
+      }
+      return {rows,unknown};
+    }
+    function previewBulk(){
+      const parsed=parseBulk(bulkText.value);bulkRows=parsed.rows;bulkUnknown=parsed.unknown;bulkSignature=bulkText.value;
+      bulkPreview.innerHTML=(bulkUnknown.length?'<p class="danger">以下行無法辨識，請修改後重新解析，避免漏存：<br>'+bulkUnknown.map(esc).join('<br>')+'</p>':'')+bulkRows.map((r,i)=>'<div class="recent"><strong>'+esc(ex(r.exerciseId).name)+' · '+esc(r.name)+'</strong><p class="muted">'+esc(r.note||'請核對下列數值')+'</p><div style="display:flex;gap:8px">'+['weight','reps','count'].map((k,n)=>'<label style="width:33%;font-size:12px">'+['重量 kg','次數 reps','組數 sets'][n]+'<input aria-label="'+['重量','次數','組數'][n]+'" type="number" min="'+(k==='weight'?0:1)+'" step="'+(k==='weight'?'any':1)+'" style="width:100%;height:42px" placeholder="未填" value="'+(r[k]??'')+'" onchange="bulkRows['+i+'].'+k+'=this.value===\'\'?null:Number(this.value)"></label>').join('')+'</div></div>').join('');
+      bulkSave.hidden=!bulkRows.length||!!bulkUnknown.length;
+    }
+    function saveBulk(){
+      if(bulkSignature!==bulkText.value||!bulkRows.length||bulkUnknown.length)return toast('請重新解析內容');
+      if(!validDate(bulkDate.value))return toast('請選擇有效的訓練日期');
+      if(bulkRows.some(r=>(r.weight!=null&&(!Number.isFinite(r.weight)||r.weight<0))||['reps','count'].some(k=>r[k]!=null&&(!Number.isInteger(r[k])||r[k]<1||(k==='count'&&r[k]>100)))))return toast('請檢查重量、次數與組數');
+      const signature=JSON.stringify({date:bulkDate.value,rows:bulkRows.map(({exerciseId,name,weight,reps,count})=>({exerciseId,name,weight,reps,count}))});
+      if(data.history.some(h=>h.importSignature===signature))return toast('這份紀錄已匯入，不會重複新增');
+      const items=[];
+      for(const r of bulkRows){
+        let item=items.find(i=>i.exerciseId===r.exerciseId);if(!item){item={exerciseId:r.exerciseId,variants:[]};items.push(item)}
+        let v=item.variants.find(v=>v.name===r.name);if(!v){v={name:r.name,sets:[]};item.variants.push(v)}
+        for(let n=0;n<(r.count??1);n++)v.sets.push({weight:r.weight,reps:r.reps,done:true,countUnknown:r.count==null});
+      }
+      data.history.push({id:Date.now(),date:bulkDate.value,items,sourceText:bulkText.value,importSignature:signature});
+      data.history.sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);
+      persist();bulkDialog.close();showScreen('history');toast('已匯入；未填數值已保留為未知');
+    }
+
     renderToday();
   </script>
 </body>
