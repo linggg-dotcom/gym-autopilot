@@ -89,13 +89,21 @@
 
   <dialog id="bulkDialog"><div class="dialog-inner">
 <div class="dialog-head"><h3>文字批次匯入</h3><button onclick="bulkDialog.close()">×</button></div>
-<p class="muted">支援清單中的英文動作名稱、kg × reps × sets、握法與左右腳。這是本機規則解析；不確定的內容請先檢查。留空的欄位會以「未填」保留，不會猜測。</p>
+<p class="muted">支援清單中的英文動作名稱、kg × reps × sets、握法與左右腳。這是本機規則解析；不確定的內容請先檢查。文字未寫次數時預設 12 reps、未寫組數時預設 1 set。重量不會自動補值；預覽中手動清空的欄位會保留為「未填」。</p>
 <label>訓練日期 <input id="bulkDate" type="date"></label>
 <textarea id="bulkText" rows="10" style="width:100%;margin:12px 0;padding:12px;background:var(--surface);color:var(--text);border:1px solid var(--line);border-radius:12px" placeholder="Hip thrust&#10;15 x 12 rep x 2 set" oninput="invalidateBulk()"></textarea>
 <button class="small" onclick="loadProvidedWorkout()">帶入你剛貼的 Workout</button>
 <button class="primary" style="margin-top:12px" onclick="previewBulk()">解析並預覽</button>
 <div id="bulkPreview" style="margin-top:16px"></div>
 <button id="bulkSave" hidden class="primary" onclick="saveBulk()">確認並儲存到 History</button>
+</div></dialog>
+  <dialog id="historyEditDialog"><div class="dialog-inner">
+<div class="dialog-head"><h3>編輯 Workout</h3><button aria-label="取消編輯" onclick="historyEditDialog.close()">×</button></div>
+<p class="muted">修改後按「儲存修改」才會更新原紀錄。相同重量與次數的連續組會合併顯示。</p>
+<label>訓練日期 <input id="historyEditDate" type="date"></label>
+<div id="historyEditRows"></div>
+<button class="small" onclick="addHistoryRow()">＋ 新增一筆動作／組</button>
+<div class="actions"><button class="small" onclick="historyEditDialog.close()">取消</button><button class="primary" onclick="saveHistoryEdit()">儲存修改</button></div>
 </div></dialog>
   <dialog id="settingsDialog">
     <div class="dialog-inner">
@@ -198,9 +206,9 @@
     function saveWorkout(){const items=data.draft.items.map(i=>({exerciseId:i.exerciseId,variants:i.variants.map(v=>({name:v.name,sets:v.sets.filter(s=>s.done&&s.weight!==''&&Number(s.reps)>0).map(s=>({weight:s.weight,reps:Number(s.reps),done:true}))})).filter(v=>v.sets.length)})).filter(i=>i.variants.length);if(!items.length)return toast('請至少完成並勾選一組');data.history.unshift({id:Date.now(),date:data.draft.date,items});data.history.sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);data.draft={date:localDate(),items:[]};persist();showScreen('today');toast('Workout 已儲存 ✓')}
 
     function renderHistory(){
-      historyList.innerHTML=data.history.length?data.history.map(h=>{
+      historyList.innerHTML=data.history.length?data.history.map((h,historyIndex)=>{
         const setTotal=h.items.reduce((n,i)=>n+i.variants.reduce((m,v)=>m+v.sets.length,0),0);
-        return`<article class="card session-card"><div class="session-head"><div><time>${dateText(h.date)}</time><div class="session-meta">${h.items.length} 個 exercises · ${h.items.some(i=>i.variants.some(v=>v.sets.some(s=>s.countUnknown)))?'部分組數待補':setTotal+' 組'}</div></div><span class="tag">Workout</span></div>${h.items.map(i=>`<button class="session-exercise" onclick="openExerciseHistory('${i.exerciseId}')"><span><strong>${esc(ex(i.exerciseId).name)}</strong><small>${compactItemSummary(i)}</small></span><span class="chevron">›</span></button>`).join('')}</article>`
+        return`<article class="card session-card"><div class="session-head"><div><time>${dateText(h.date)}</time><div class="session-meta">${h.items.length} 個 exercises · ${h.items.some(i=>i.variants.some(v=>v.sets.some(s=>s.countUnknown)))?'部分組數待補':setTotal+' 組'}</div></div><button class="small" onclick="editHistory(${historyIndex})">編輯</button></div>${h.items.map(i=>`<button class="session-exercise" onclick="openExerciseHistory('${i.exerciseId}')"><span><strong>${esc(ex(i.exerciseId).name)}</strong><small>${compactItemSummary(i)}</small></span><span class="chevron">›</span></button>`).join('')}</article>`
       }).join(''):'<div class="empty">儲存第一個 Workout 後，全部紀錄會依日期列在這裡。</div>';
     }
     function openExerciseHistory(id){
@@ -266,7 +274,10 @@ Abductor
         let weight=nums.length?nums[0]:(empty?0:null),note=empty?'Empty 按外加重量 0 kg 記錄；不含機器或槓本身重量。':'';
         if(weight==null&&lastWeight!=null){weight=lastWeight;note+='沿用同動作上一行重量，請確認。'}
         if(weight!=null)lastWeight=weight;
-        const reps=nums.length>=2?nums[1]:null,count=nums.length>=3?nums[2]:null;
+        const repsLabel=low.match(/(\d+(?:\.\d+)?)\s*(?:reps?\b|次)/),setsLabel=low.match(/(\d+(?:\.\d+)?)\s*(?:sets?\b|組)/);
+        const hasReps=!!repsLabel||nums.length>=3||(nums.length>=2&&!setsLabel),hasCount=!!setsLabel||nums.length>=3;
+        const reps=repsLabel?Number(repsLabel[1]):hasReps?nums[1]:12,count=setsLabel?Number(setsLabel[1]):hasCount?nums[2]:1;
+        if(!hasReps)note+='未寫次數：預設 12 reps。';if(!hasCount)note+='未寫組數：預設 1 set。';
         if((reps!=null&&(!Number.isInteger(reps)||reps<1))||(count!=null&&(!Number.isInteger(count)||count<1||count>100))){unknown.push(line);continue}
         let names=['Standard'];
         if(/single\s*leg/.test(low)){
@@ -299,6 +310,46 @@ Abductor
       data.history.push({id:Date.now(),date:bulkDate.value,items,sourceText:bulkText.value,importSignature:signature});
       data.history.sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);
       persist();bulkDialog.close();showScreen('history');toast('已匯入；未填數值已保留為未知');
+    }
+
+
+    let historyEditState=null;
+    function editHistory(index){
+      const session=data.history[index];if(!session)return toast('找不到這筆紀錄');
+      const rows=[];
+      for(const item of session.items)for(const v of item.variants)for(const set of v.sets){
+        const weight=set.weight==null||set.weight===''?null:Number(set.weight),reps=set.reps==null||set.reps===''?null:Number(set.reps);
+        const previous=rows.at(-1);
+        if(previous&&previous.exerciseId===item.exerciseId&&previous.name===v.name&&previous.weight===weight&&previous.reps===reps&&previous.count!=null&&!set.countUnknown)previous.count++;
+        else rows.push({exerciseId:item.exerciseId,name:v.name,weight,reps,count:set.countUnknown?null:1});
+      }
+      historyEditState={index,snapshot:JSON.stringify(session),rows};
+      historyEditDate.value=session.date;renderHistoryEditor();historyEditDialog.showModal();
+    }
+    function renderHistoryEditor(){
+      historyEditRows.innerHTML=historyEditState.rows.map((r,i)=>'<div class="recent"><div class="variant-head"><select aria-label="動作" class="variant-select" onchange="changeHistoryExercise('+i+',this.value)">'+library().concat(library().some(x=>x.id===r.exerciseId)?[]:[ex(r.exerciseId)]).map(x=>'<option value="'+esc(x.id)+'" '+(x.id===r.exerciseId?'selected':'')+'>'+esc(x.name)+'</option>').join('')+'</select><button class="remove" aria-label="移除此筆" onclick="removeHistoryRow('+i+')">×</button></div><label>Stance / Grip<input style="width:100%;margin:8px 0;min-height:40px" value="'+esc(r.name)+'" oninput="historyEditState.rows['+i+'].name=this.value"></label><div style="display:flex;gap:8px">'+['weight','reps','count'].map((key,n)=>'<label style="width:33%;font-size:12px">'+[ex(r.exerciseId).metric==='assistance'?'輔助 kg':'重量 kg','次數 reps','組數 sets'][n]+'<input aria-label="'+['重量','次數','組數'][n]+'" type="number" min="'+(key==='weight'?0:1)+'" step="'+(key==='weight'?'any':1)+'" style="width:100%;min-height:42px" placeholder="未填" value="'+(r[key]??'')+'" oninput="historyEditState.rows['+i+'].'+key+'=this.value===\'\'?null:Number(this.value)"></label>').join('')+'</div></div>').join('');
+    }
+    function changeHistoryExercise(i,id){const r=historyEditState.rows[i];r.exerciseId=id;r.name=ex(id).variants[0];renderHistoryEditor()}
+    function addHistoryRow(){historyEditState.rows.push({exerciseId:BASE[0].id,name:BASE[0].variants[0],weight:null,reps:12,count:1});renderHistoryEditor()}
+    function removeHistoryRow(i){if(historyEditState.rows.length===1)return toast('至少保留一筆動作');historyEditState.rows.splice(i,1);renderHistoryEditor()}
+    function validHistoryRows(rows){return rows.length>0&&rows.every(r=>r.name.trim()&&(r.weight==null||(Number.isFinite(r.weight)&&r.weight>=0))&&['reps','count'].every(k=>r[k]==null||(Number.isInteger(r[k])&&r[k]>0&&(k!=='count'||r[k]<=100))))}
+    function saveHistoryEdit(){
+      if(!historyEditState)return;
+      if(!validDate(historyEditDate.value))return toast('請選擇有效日期');
+      const {index,snapshot,rows}=historyEditState;
+      if(!validHistoryRows(rows))return toast('請檢查動作、重量、次數與組數（每筆最多 100 組）');
+      if(JSON.stringify(data.history[index])!==snapshot)return toast('紀錄已變動，請關閉後重新編輯');
+      const items=[];
+      for(const r of rows){
+        let item=items.find(i=>i.exerciseId===r.exerciseId);if(!item){item={exerciseId:r.exerciseId,variants:[]};items.push(item)}
+        const name=r.name.trim();let variant=item.variants.find(v=>v.name===name);if(!variant){variant={name,sets:[]};item.variants.push(variant)}
+        for(let n=0;n<(r.count??1);n++)variant.sets.push({weight:r.weight,reps:r.reps,done:true,countUnknown:r.count==null});
+      }
+      const original=data.history[index];
+      data.history[index]={...original,date:historyEditDate.value,items,editedAt:new Date().toISOString()};
+      // Retain the original import signature to prevent reimporting the same source after corrections.
+      data.history.sort((a,b)=>b.date.localeCompare(a.date)||b.id-a.id);
+      persist();historyEditState=null;historyEditDialog.close();showScreen('history');toast('已更新原本的 Workout ✓');
     }
 
     renderToday();
